@@ -117,23 +117,21 @@ func (w *writer) PopIndent() {
 
 var escapedCharsAll = "\\`*_{}[]()#+-.!:|&<>$"
 
-func markdownEscape(w *writer, s string, escapedChars string) error {
+func markdownEscape(w *writer, b []byte, escapedChars string) {
 	// could do a better job here, but this way is safe.
 	var last byte
-	i := strings.IndexAny(s, escapedChars)
+	i := bytes.IndexAny(b, escapedChars)
 	for i != -1 {
-		if _, err := w.WriteString(s[:i]); err != nil {
-			return err
-		}
+		w.Write(b[:i])
 		escape := true
 
 		// Detect some easy cases where escapes are both
 		// unnecessary and jarring.
 		prev := last
 		if i > 0 {
-			prev = s[i-1]
+			prev = b[i-1]
 		}
-		switch s[i] {
+		switch b[i] {
 		case '.':
 			// '.' can be magic if it occurs are a digit (might start a list)
 			if '0' < prev || '9' > prev {
@@ -141,65 +139,45 @@ func markdownEscape(w *writer, s string, escapedChars string) error {
 			}
 		case ':':
 			// ':' can be magic for autolinking, but only if it's followed by //
-			if len(s) < i+3 || s[i+1] != '/' || s[i+2] != '/' {
+			if len(b) < i+3 || b[i+1] != '/' || b[i+2] != '/' {
 				escape = false
 			}
 		case '!':
 			// '!' can be magic for image links (when followed by '[')
-			if len(s) < i+2 || s[i+1] != '!' {
+			if len(b) < i+2 || b[i+1] != '!' {
 				escape = false
 			}
 		}
 
 		if escape {
-			if err := w.WriteByte('\\'); err != nil {
-				return err
-			}
+			w.WriteByte('\\')
 		}
-		if err := w.WriteByte(s[i]); err != nil {
-			return err
-		}
-		last = s[i]
-		s = s[i+1:]
-		i = strings.IndexAny(s, escapedChars)
+		w.WriteByte(b[i])
+		last = b[i]
+		b = b[i+1:]
+		i = bytes.IndexAny(b, escapedChars)
 	}
-	_, err := w.WriteString(s)
-	return err
+	w.Write(b)
 }
 
-func surround(w *writer, prefix string, what []byte, suffix string, escapedChars string) error {
-	if _, err := w.WriteString(prefix); err != nil {
-		return err
-	}
-	if err := markdownEscape(w, string(what), escapedChars); err != nil {
-		return err
-	}
-	_, err := w.WriteString(suffix)
-	return err
+func surround(w *writer, prefix string, what []byte, suffix string, escapedChars string) {
+	w.WriteString(prefix)
+	markdownEscape(w, what, escapedChars)
+	w.WriteString(suffix)
 }
 
-func singleline(w *writer, prefix string, buf []byte) error {
-	if err := w.EndLine(); err != nil {
-		return err
-	}
-	if _, err := w.WriteString(prefix); err != nil {
-		return err
-	}
+func singleline(w *writer, prefix string, buf []byte) {
+	w.EndLine()
+	w.WriteString(prefix)
 	idx := bytes.IndexAny(buf, "\r\n")
 	for idx != -1 {
-		if _, err := w.Write(buf[:idx]); err != nil {
-			return err
-		}
-		if err := w.WriteByte(' '); err != nil {
-			return err
-		}
+		w.Write(buf[:idx])
+		w.WriteByte(' ')
 		buf = buf[idx+1:]
 		idx = bytes.IndexAny(buf, "\r\n")
 	}
-	if _, err := w.Write(buf); err != nil {
-		return err
-	}
-	return w.WriteByte('\n')
+	w.Write(buf)
+	w.WriteByte('\n')
 }
 
 func renderElement(w *writer, n *html.Node, listIndex int) error {
@@ -207,7 +185,8 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	case html.ErrorNode:
 		return errors.New("html2markdown: Markup contains errors.")
 	case html.TextNode:
-		return markdownEscape(w, n.Data, escapedCharsAll)
+		markdownEscape(w, []byte(n.Data), escapedCharsAll)
+		return nil
 	case html.ElementNode:
 		// nothing.
 	case html.CommentNode:
@@ -224,19 +203,23 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	switch n.DataAtom {
 	case atom.H1:
 		if t, ok := childText(n); ok {
-			return singleline(w, "# ", t)
+			singleline(w, "# ", t)
+			return nil
 		}
 	case atom.H2:
 		if t, ok := childText(n); ok {
-			return singleline(w, "## ", t)
+			singleline(w, "## ", t)
+			return nil
 		}
 	case atom.H3:
 		if t, ok := childText(n); ok {
-			return singleline(w, "### ", t)
+			singleline(w, "### ", t)
+			return nil
 		}
 	case atom.H4:
 		if t, ok := childText(n); ok {
-			return singleline(w, "#### ", t)
+			singleline(w, "#### ", t)
+			return nil
 		}
 	case atom.Em, atom.I:
 		return renderContents(w, "*", n, "*")
@@ -246,69 +229,49 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 		if contents := tryLeafChildText(n); contents != nil {
 			if bytes.IndexByte(contents, '`') == -1 {
 				w.Verbatim++
-				err := surround(w, "`", contents, "`", "")
+				surround(w, "`", contents, "`", "")
 				w.Verbatim--
-				return err
+				return nil
 			}
 		}
 	case atom.Pre:
 		if contents := tryLeafChildText(n); contents != nil {
 			if bytes.Index(contents, []byte("```")) == -1 {
-				if err := w.EndLine(); err != nil {
-					return err
-				}
-				if _, err := w.WriteString("```\n"); err != nil {
-					return err
-				}
+				w.EndLine()
+				w.WriteString("```\n")
 				w.Verbatim++
-				err := surround(w, "", contents, "", "")
+				surround(w, "", contents, "", "")
 				w.Verbatim--
-				if err != nil {
-					return err
-				}
-				if err = w.EndLine(); err != nil {
-					return err
-				}
-				_, err = w.WriteString("```\n")
-				return err
+				w.EndLine()
+				w.WriteString("```\n")
+				return nil
 			}
 		}
 	case atom.A:
 		if isSimpleLink(n) {
 			text := leafChildText(n)
 			href := attr(n, "href")
-			if err := surround(w, "[", text, "]", "[]"); err != nil {
-				return err
-			}
-			return surround(w, "(", []byte(href), ")", "()")
+			surround(w, "[", text, "]", "[]")
+			surround(w, "(", []byte(href), ")", "()")
+			return nil
 		} else if isImageLink(n) {
 			imgTag := n.FirstChild
 			url := attr(imgTag, "src")
 			alt := attr(imgTag, "alt")
 			title := attr(imgTag, "title")
-			if err := surround(w, "![", []byte(alt), "]", "[]"); err != nil {
-				return err
-			}
+			// TODO: look at class/style, figure out alignment and such.
+			surround(w, "![", []byte(alt), "]", "[]")
 			if title == "" {
-				if err := surround(w, "(", []byte(url), ")", "()"); err != nil {
-					return err
-				}
+				surround(w, "(", []byte(url), ")", "()")
 			} else {
-				if err := surround(w, "(", []byte(url), " ", "\"()"); err != nil {
-					return err
-				}
-				if err := surround(w, "\"", []byte(title), "\")", "\""); err != nil {
-					return err
-				}
+				surround(w, "(", []byte(url), " ", "\"()")
+				surround(w, "\"", []byte(title), "\")", "\"")
 			}
 			return nil
 		}
 	case atom.Ol, atom.Ul:
 		if containsOnlyListItems(n) {
-			if err := w.EndLine(); err != nil {
-				return err
-			}
-
+			w.EndLine()
 			i := 0
 			for kid := n.FirstChild; kid != nil; kid = kid.NextSibling {
 				if kid.Type != html.ElementNode {
@@ -352,16 +315,14 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 }
 
 func renderContents(w *writer, prefix string, node *html.Node, suffix string) error {
-	if _, err := w.WriteString(prefix); err != nil {
-		return err
-	}
+	w.WriteString(prefix)
 	for n := node.FirstChild; n != nil; n = n.NextSibling {
 		if err := renderElement(w, n, -1); err != nil {
 			return err
 		}
 	}
-	_, err := w.WriteString(suffix)
-	return err
+	w.WriteString(suffix)
+	return nil
 }
 
 func childText(node *html.Node) ([]byte, bool) {
@@ -433,6 +394,7 @@ var imgAllowedAttrs = map[string]bool{
 	"width":  true,
 	"height": true,
 	"class":  true,
+	"style":  true,
 }
 
 func isImageLink(node *html.Node) bool {
