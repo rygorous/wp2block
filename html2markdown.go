@@ -291,12 +291,18 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 				prefix = "* "
 			}
 			w.PushIndent("    ")
-			if err := renderContents(w, prefix, n, ""); err != nil {
-				return err
-			}
+			err := renderContents(w, prefix, n, "")
 			w.PopIndent()
-			return w.EndLine()
+			w.EndLine()
+			return err
 		}
+	case atom.Blockquote:
+		w.EndLine()
+		w.PushIndent("> ")
+		err := renderContents(w, "> ", n, "")
+		w.PopIndent()
+		w.EndLine()
+		return err
 	}
 
 	// By default, fall back to rendering as HTML
