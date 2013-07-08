@@ -115,9 +115,9 @@ func (w *writer) PopIndent() {
 	w.indents = w.indents[:len(w.indents)-1]
 }
 
-var escapedChars = "\\`*_{}[]()#+-.!:|&<>$"
+var escapedCharsAll = "\\`*_{}[]()#+-.!:|&<>$"
 
-func markdownEscape(w *writer, s string) error {
+func markdownEscape(w *writer, s string, escapedChars string) error {
 	// could do a better job here, but this way is safe.
 	var last byte
 	i := strings.IndexAny(s, escapedChars)
@@ -167,20 +167,14 @@ func markdownEscape(w *writer, s string) error {
 	return err
 }
 
-func surround(w *writer, prefix string, buf []byte, suffix string, escape bool) error {
+func surround(w *writer, prefix string, what []byte, suffix string, escapedChars string) error {
 	if _, err := w.WriteString(prefix); err != nil {
 		return err
 	}
-	var err error
-	if escape {
-		err = markdownEscape(w, string(buf))
-	} else {
-		_, err = w.Write(buf)
-	}
-	if err != nil {
+	if err := markdownEscape(w, string(what), escapedChars); err != nil {
 		return err
 	}
-	_, err = w.WriteString(suffix)
+	_, err := w.WriteString(suffix)
 	return err
 }
 
@@ -213,7 +207,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	case html.ErrorNode:
 		return errors.New("html2markdown: Markup contains errors.")
 	case html.TextNode:
-		return markdownEscape(w, n.Data)
+		return markdownEscape(w, n.Data, escapedCharsAll)
 	case html.ElementNode:
 		// nothing.
 	case html.CommentNode:
@@ -228,6 +222,10 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	}
 
 	switch n.DataAtom {
+	case atom.H1:
+		if t, ok := childText(n); ok {
+			return singleline(w, "# ", t)
+		}
 	case atom.H2:
 		if t, ok := childText(n); ok {
 			return singleline(w, "## ", t)
@@ -248,7 +246,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 		if contents := tryLeafChildText(n); contents != nil {
 			if bytes.IndexByte(contents, '`') == -1 {
 				w.Verbatim++
-				err := surround(w, "`", contents, "`", false)
+				err := surround(w, "`", contents, "`", "")
 				w.Verbatim--
 				return err
 			}
@@ -263,7 +261,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 					return err
 				}
 				w.Verbatim++
-				err := surround(w, "", contents, "", false)
+				err := surround(w, "", contents, "", "")
 				w.Verbatim--
 				if err != nil {
 					return err
@@ -279,12 +277,31 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 		if isSimpleLink(n) {
 			text := leafChildText(n)
 			href := attr(n, "href")
-			if bytes.IndexAny(text, "[]") == -1 && strings.IndexAny(href, "()") == -1 {
-				if err := surround(w, "[", text, "]", true); err != nil {
+			if err := surround(w, "[", text, "]", "[]"); err != nil {
+				return err
+			}
+			return surround(w, "(", []byte(href), ")", "()")
+		} else if isImageLink(n) {
+			imgTag := n.FirstChild
+			url := attr(imgTag, "src")
+			alt := attr(imgTag, "alt")
+			title := attr(imgTag, "title")
+			if err := surround(w, "![", []byte(alt), "]", "[]"); err != nil {
+				return err
+			}
+			if title == "" {
+				if err := surround(w, "(", []byte(url), ")", "()"); err != nil {
 					return err
 				}
-				return surround(w, "(", []byte(href), ")", false)
+			} else {
+				if err := surround(w, "(", []byte(url), " ", "\"()"); err != nil {
+					return err
+				}
+				if err := surround(w, "\"", []byte(title), "\")", "\""); err != nil {
+					return err
+				}
 			}
+			return nil
 		}
 	case atom.Ol, atom.Ul:
 		if containsOnlyListItems(n) {
@@ -407,6 +424,51 @@ func leafChildText(node *html.Node) []byte {
 // Returns whether a link is "simple", i.e. just has a href and nothing else.
 func isSimpleLink(node *html.Node) bool {
 	return !containsMarkup(node) && len(node.Attr) == 1 && node.Attr[0].Key == "href"
+}
+
+var imgAllowedAttrs = map[string]bool{
+	"src":    true,
+	"alt":    true,
+	"title":  true,
+	"width":  true,
+	"height": true,
+	"class":  true,
+}
+
+func isImageLink(node *html.Node) bool {
+	// Actual link must have only an href attribute
+	if len(node.Attr) != 1 || node.Attr[0].Key != "href" {
+		return false
+	}
+
+	// It most contain exactly one element.
+	if node.FirstChild == nil || node.FirstChild != node.LastChild {
+		return false
+	}
+
+	// That element must be an img tag.
+	imgTag := node.FirstChild
+	if imgTag.Type != html.ElementNode || imgTag.DataAtom != atom.Img {
+		return false
+	}
+
+	// Image source and link href must be the same value
+	if attr(node, "href") != attr(imgTag, "src") {
+		return false
+	}
+
+	// All attributes on the img tag must be allowed.
+	return hasOnlyAllowedAttrs(imgTag, imgAllowedAttrs)
+}
+
+// Checks whether all attributes of "node" are in "allowed"
+func hasOnlyAllowedAttrs(node *html.Node, allowed map[string]bool) bool {
+	for _, attr := range node.Attr {
+		if !allowed[attr.Key] {
+			return false
+		}
+	}
+	return true
 }
 
 func attr(node *html.Node, key string) string {
