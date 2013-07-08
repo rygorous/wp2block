@@ -6,6 +6,7 @@ import (
 	"code.google.com/p/go.net/html/atom"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -185,8 +186,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	case html.ErrorNode:
 		return errors.New("html2markdown: Markup contains errors.")
 	case html.TextNode:
-		markdownEscape(w, []byte(n.Data), escapedCharsAll)
-		return nil
+		return handleText(w, n.Data)
 	case html.ElementNode:
 		// nothing.
 	case html.CommentNode:
@@ -254,19 +254,11 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 			surround(w, "[", text, "]", "[]")
 			surround(w, "(", []byte(href), ")", "()")
 			return nil
-		} else if isImageLink(n) {
-			imgTag := n.FirstChild
-			url := attr(imgTag, "src")
-			alt := attr(imgTag, "alt")
-			title := attr(imgTag, "title")
-			// TODO: look at class/style, figure out alignment and such.
-			surround(w, "![", []byte(alt), "]", "[]")
-			if title == "" {
-				surround(w, "(", []byte(url), ")", "()")
-			} else {
-				surround(w, "(", []byte(url), " ", "\"()")
-				surround(w, "\"", []byte(title), "\")", "\"")
-			}
+		} else if isImageLink(n) && handleImage(w, n.FirstChild) {
+			return nil
+		}
+	case atom.Img:
+		if handleImage(w, n) {
 			return nil
 		}
 	case atom.Ol, atom.Ul:
@@ -331,6 +323,97 @@ func childText(node *html.Node) ([]byte, bool) {
 	return wr.Bytes(), err == nil
 }
 
+var latexStart = "$latex "
+
+func handleText(w *writer, text string) error {
+	// find LaTeX math
+	i := strings.Index(text, latexStart)
+	for i != -1 {
+		// handle bit up to latex math
+		markdownEscape(w, []byte(text[:i]), escapedCharsAll)
+
+		// find end
+		innerStart := i + len(latexStart)
+		end := innerStart
+		for end < len(text) && (text[end-1] == '\\' || text[end] != '$') {
+			end++
+		}
+		if end == len(text) {
+			break
+		}
+		innerEnd := end
+		end++
+
+		// okay, LaTeX block is identified. figure out whether we're
+		// inline or display math.
+		if i == 0 || text[i-1] == '\n' {
+			// If it's at the start of a tag or right after a newline, assume
+			// it's display math.
+			w.WriteString("$$[")
+			w.WriteString(text[innerStart:innerEnd])
+			w.WriteString("$$]")
+		} else {
+			w.WriteString("$$")
+			w.WriteString(text[innerStart:innerEnd])
+			w.WriteString("$$")
+		}
+
+		text = text[end:]
+		i = strings.Index(text, latexStart)
+	}
+
+	markdownEscape(w, []byte(text), escapedCharsAll)
+	return nil
+}
+
+var (
+	imgAllowedAttrs = map[string]bool{
+		"src":    true,
+		"alt":    true,
+		"title":  true,
+		"width":  true,
+		"height": true,
+		"class":  true,
+		"style":  true,
+	}
+	hasFloatLeft  = regexp.MustCompile(`(\W|^)float:\s*left\s*(;|$)`)
+	hasFloatRight = regexp.MustCompile(`(\W|^)float:\s*right\s(;|$)`)
+)
+
+func handleImage(w *writer, node *html.Node) bool {
+	if !hasOnlyAllowedAttrs(node, imgAllowedAttrs) {
+		return false
+	}
+
+	url := attr(node, "src")
+	alt := attr(node, "alt")
+	title := attr(node, "title")
+
+	// TODO look at class for alignment
+	out_attrs := ""
+	if style := attr(node, "style"); style != "" {
+		if hasFloatLeft.FindStringIndex(style) != nil {
+			out_attrs += " floatleft"
+		}
+		if hasFloatRight.FindStringIndex(style) != nil {
+			out_attrs += " floatright"
+		}
+	}
+
+	if out_attrs != "" {
+		alt = "{" + strings.TrimSpace(out_attrs) + "}" + alt
+	}
+
+	surround(w, "![", []byte(alt), "]", "[]")
+	if title == "" {
+		surround(w, "(", []byte(url), ")", "()")
+	} else {
+		surround(w, "(", []byte(url), " ", "\"()")
+		surround(w, "\"", []byte(title), "\")", "\"")
+	}
+	return true
+}
+
 // Returns whether a node contains any markup whatsoever
 func containsMarkup(node *html.Node) bool {
 	if node.FirstChild == node.LastChild {
@@ -387,16 +470,6 @@ func isSimpleLink(node *html.Node) bool {
 	return !containsMarkup(node) && len(node.Attr) == 1 && node.Attr[0].Key == "href"
 }
 
-var imgAllowedAttrs = map[string]bool{
-	"src":    true,
-	"alt":    true,
-	"title":  true,
-	"width":  true,
-	"height": true,
-	"class":  true,
-	"style":  true,
-}
-
 func isImageLink(node *html.Node) bool {
 	// Actual link must have only an href attribute
 	if len(node.Attr) != 1 || node.Attr[0].Key != "href" {
@@ -419,8 +492,7 @@ func isImageLink(node *html.Node) bool {
 		return false
 	}
 
-	// All attributes on the img tag must be allowed.
-	return hasOnlyAllowedAttrs(imgTag, imgAllowedAttrs)
+	return true
 }
 
 // Checks whether all attributes of "node" are in "allowed"
