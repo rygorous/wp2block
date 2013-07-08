@@ -41,8 +41,9 @@ func ConvertHtmlToMarkdown(in []byte) ([]byte, error) {
 type writer struct {
 	Verbatim int // if >0, don't do any processing on output newlines
 
-	out     bytes.Buffer
-	indents []string // stack of indenting prefixes
+	lastWasLf bool // last character written was a linefeed
+	out       bytes.Buffer
+	indents   []string // stack of indenting prefixes
 }
 
 func (w *writer) Bytes() []byte {
@@ -68,16 +69,24 @@ func (w *writer) Write(p []byte) (n int, err error) {
 		i = bytes.IndexByte(p, '\n')
 	}
 	wr, err = w.out.Write(p)
+	if wr != 0 {
+		w.lastWasLf = false
+	}
 	n += wr
 	return
 }
 
 func (w *writer) WriteByte(b byte) error {
 	err := w.out.WriteByte(b)
-	if err == nil && b == '\n' && w.Verbatim == 0 {
-		// it's a newline we have to process
-		if l := len(w.indents); l > 0 {
-			_, err = w.out.WriteString(w.indents[l-1])
+	if err == nil {
+		if b == '\n' {
+			w.lastWasLf = true
+			// is it a newline we have to process?
+			if l := len(w.indents); l > 0 && w.Verbatim == 0 {
+				_, err = w.out.WriteString(w.indents[l-1])
+			}
+		} else {
+			w.lastWasLf = false
 		}
 	}
 	return err
@@ -86,6 +95,13 @@ func (w *writer) WriteByte(b byte) error {
 func (w *writer) WriteString(s string) (n int, err error) {
 	n, err = w.Write([]byte(s))
 	return
+}
+
+func (w *writer) EndLine() error {
+	if !w.lastWasLf {
+		return w.WriteByte('\n')
+	}
+	return nil
 }
 
 func (w *writer) PushIndent(prefix string) {
@@ -168,7 +184,10 @@ func surround(w *writer, prefix string, buf []byte, suffix string, escape bool) 
 	return err
 }
 
-func nowrap(w *writer, prefix string, buf []byte, suffix string) error {
+func singleline(w *writer, prefix string, buf []byte) error {
+	if err := w.EndLine(); err != nil {
+		return err
+	}
 	if _, err := w.WriteString(prefix); err != nil {
 		return err
 	}
@@ -186,8 +205,7 @@ func nowrap(w *writer, prefix string, buf []byte, suffix string) error {
 	if _, err := w.Write(buf); err != nil {
 		return err
 	}
-	_, err := w.WriteString(suffix)
-	return err
+	return w.WriteByte('\n')
 }
 
 func renderElement(w *writer, n *html.Node, listIndex int) error {
@@ -212,15 +230,15 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	switch n.DataAtom {
 	case atom.H2:
 		if t, ok := childText(n); ok {
-			return nowrap(w, "\n## ", t, "\n")
+			return singleline(w, "## ", t)
 		}
 	case atom.H3:
 		if t, ok := childText(n); ok {
-			return nowrap(w, "\n### ", t, "\n")
+			return singleline(w, "### ", t)
 		}
 	case atom.H4:
 		if t, ok := childText(n); ok {
-			return nowrap(w, "\n#### ", t, "\n")
+			return singleline(w, "#### ", t)
 		}
 	case atom.Em, atom.I:
 		return renderContents(w, "*", n, "*")
@@ -238,10 +256,22 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	case atom.Pre:
 		if contents := tryLeafChildText(n); contents != nil {
 			if bytes.Index(contents, []byte("```")) == -1 {
-				contents := bytes.TrimSuffix(contents, []byte("\n"))
+				if err := w.EndLine(); err != nil {
+					return err
+				}
+				if _, err := w.WriteString("```\n"); err != nil {
+					return err
+				}
 				w.Verbatim++
-				err := surround(w, "\n```\n", contents, "\n```\n", false)
+				err := surround(w, "", contents, "", false)
 				w.Verbatim--
+				if err != nil {
+					return err
+				}
+				if err = w.EndLine(); err != nil {
+					return err
+				}
+				_, err = w.WriteString("```\n")
 				return err
 			}
 		}
@@ -258,7 +288,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 		}
 	case atom.Ol, atom.Ul:
 		if containsOnlyListItems(n) {
-			if err := w.WriteByte('\n'); err != nil {
+			if err := w.EndLine(); err != nil {
 				return err
 			}
 
@@ -293,7 +323,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 				return err
 			}
 			w.PopIndent()
-			return w.WriteByte('\n')
+			return w.EndLine()
 		}
 	}
 
