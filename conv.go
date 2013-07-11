@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"github.com/rygorous/wp2block/wxr"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -227,16 +228,33 @@ func printComments(comments []*wxr.Comment) {
 	}
 }
 
+func writePost(wr io.Writer, doc *Doc) error {
+	// write headers
+	fmt.Fprintf(wr, "-title=%s\n", doc.Title)
+	fmt.Fprintf(wr, "-time=%s\n", doc.PublishedDate.Format("2006-01-02 15:04:05"))
+	if doc.Type == DocPage {
+		fmt.Fprintf(wr, "-type=page\n")
+	}
+
+	// write content
+	_, err := wr.Write(doc.Content)
+	return err
+}
+
 func save(blog *Blog, dest string) error {
-	err := os.MkdirAll(dest, 0733)
-	if err != nil {
+	if err := os.MkdirAll(dest, 0733); err != nil {
 		return err
 	}
 
 	for _, doc := range blog.Docs {
+		if doc.Status != StatusPublish {
+			continue
+		}
 		fname := filepath.Join(dest, doc.Id+".md")
-		err = ioutil.WriteFile(fname, doc.Content, 0644)
-		if err != nil {
+		if file, err := os.Create(fname); err == nil {
+			err = writePost(file, doc)
+			file.Close()
+		} else {
 			return err
 		}
 	}
