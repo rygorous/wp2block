@@ -78,7 +78,13 @@ func buildDocFor(item *wxr.Item) *Doc {
 		name = generatePostId(item.Title)
 	}
 
-	markdown, err := ConvertHtmlToMarkdown(item.Content)
+	fmt.Printf("doc: %s\n", item.Title)
+	urlRewrite := func(url string) string {
+		//fmt.Printf("  %s\n", url)
+		return url
+	}
+
+	markdown, err := ConvertHtmlToMarkdown(item.Content, urlRewrite)
 	if err != nil {
 		log.Fatalf("%q (%d): Error converting contents to markdown: %s\n", item.Title, item.PostId, err.Error())
 	}
@@ -250,6 +256,7 @@ func save(blog *Blog, dest string) error {
 		if doc.Status != StatusPublish {
 			continue
 		}
+
 		fname := filepath.Join(dest, doc.Id+".md")
 		if file, err := os.Create(fname); err == nil {
 			err = writePost(file, doc)
@@ -270,7 +277,7 @@ func main() {
 	}
 
 	blog := convert(&r.Channel)
-	err = save(blog, "c:\\Store\\temp\\blog")
+	err = save(blog, "c:\\Store\\Blog\\posts")
 	if err != nil {
 		fmt.Printf("Error writing output: %s\n", err.Error())
 	}

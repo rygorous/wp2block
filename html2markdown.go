@@ -10,7 +10,9 @@ import (
 	"strings"
 )
 
-func ConvertHtmlToMarkdown(in []byte) ([]byte, error) {
+type UrlRewriteFunc func(url string) string
+
+func ConvertHtmlToMarkdown(in []byte, rewriteFn UrlRewriteFunc) ([]byte, error) {
 	// parse it!
 	context := &html.Node{
 		Type:     html.ElementNode,
@@ -28,9 +30,9 @@ func ConvertHtmlToMarkdown(in []byte) ([]byte, error) {
 	}
 
 	// render it back
-	var wr writer
+	wr := &writer{RewriteUrl: rewriteFn}
 	for _, elem := range elems {
-		err = renderElement(&wr, elem, -1)
+		err = renderElement(wr, elem, -1)
 		if err != nil {
 			return nil, err
 		}
@@ -40,7 +42,8 @@ func ConvertHtmlToMarkdown(in []byte) ([]byte, error) {
 }
 
 type writer struct {
-	Verbatim int // if >0, don't do any processing on output newlines
+	Verbatim   int // if >0, don't do any processing on output newlines
+	RewriteUrl UrlRewriteFunc
 
 	lastWasLf bool // last character written was a linefeed
 	out       bytes.Buffer
@@ -251,6 +254,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 		if isSimpleLink(n) {
 			text := leafChildText(n)
 			href := attr(n, "href")
+			href = w.RewriteUrl(href)
 			surround(w, "[", text, "]", "[]")
 			surround(w, "(", []byte(href), ")", "()")
 			return nil
@@ -394,6 +398,8 @@ func handleImage(w *writer, node *html.Node) bool {
 	url := attr(node, "src")
 	alt := attr(node, "alt")
 	title := attr(node, "title")
+
+	url = w.RewriteUrl(url)
 
 	// TODO look at class for alignment
 	out_attrs := ""
