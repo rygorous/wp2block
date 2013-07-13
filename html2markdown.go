@@ -39,6 +39,7 @@ func ConvertHtmlToMarkdown(in []byte, rewriteFn UrlRewriteFunc) ([]byte, error) 
 			return nil, err
 		}
 	}
+	wr.handleDelayedLf()
 
 	return wr.Bytes(), nil
 }
@@ -47,13 +48,21 @@ type writer struct {
 	Verbatim   int // if >0, don't do any processing on output newlines
 	RewriteUrl UrlRewriteFunc
 
-	lastWasLf bool // last character written was a linefeed
-	out       bytes.Buffer
-	indents   []string // stack of indenting prefixes
+	lfRunCounter int // length of the current run of line feeds written
+	lfRunTarget  int // target length of current run of line feeds
+	out          bytes.Buffer
+	indents      []string // stack of indenting prefixes
 }
 
 func (w *writer) Bytes() []byte {
 	return w.out.Bytes()
+}
+
+func (w *writer) handleDelayedLf() {
+	for w.lfRunCounter < w.lfRunTarget {
+		w.WriteByte('\n')
+	}
+	w.lfRunTarget = 0
 }
 
 func (w *writer) Write(p []byte) (n int, err error) {
@@ -61,8 +70,14 @@ func (w *writer) Write(p []byte) (n int, err error) {
 	n = 0
 	i := bytes.IndexByte(p, '\n')
 	for i != -1 {
+		if i != 0 {
+			w.handleDelayedLf()
+		}
 		wr, err = w.out.Write(p[:i])
-		n += wr
+		if wr != 0 {
+			n += wr
+			w.lfRunCounter = 0
+		}
 		if err != nil {
 			return
 		}
@@ -74,25 +89,31 @@ func (w *writer) Write(p []byte) (n int, err error) {
 		p = p[i+1:]
 		i = bytes.IndexByte(p, '\n')
 	}
+	if len(p) != 0 {
+		w.handleDelayedLf()
+	}
 	wr, err = w.out.Write(p)
 	if wr != 0 {
-		w.lastWasLf = false
+		n += wr
+		w.lfRunCounter = 0
 	}
-	n += wr
 	return
 }
 
 func (w *writer) WriteByte(b byte) error {
+	if b != '\n' && w.lfRunTarget != 0 {
+		w.handleDelayedLf()
+	}
 	err := w.out.WriteByte(b)
 	if err == nil {
 		if b == '\n' {
-			w.lastWasLf = true
+			w.lfRunCounter++
 			// is it a newline we have to process?
 			if l := len(w.indents); l > 0 && w.Verbatim == 0 {
 				_, err = w.out.WriteString(w.indents[l-1])
 			}
 		} else {
-			w.lastWasLf = false
+			w.lfRunCounter = 0
 		}
 	}
 	return err
@@ -103,14 +124,16 @@ func (w *writer) WriteString(s string) (n int, err error) {
 	return
 }
 
-func (w *writer) EndLine() error {
-	if !w.lastWasLf {
-		return w.WriteByte('\n')
+func (w *writer) EnsureLinefeeds(min int) {
+	if min > w.lfRunTarget {
+		w.lfRunTarget = min
 	}
-	return nil
 }
 
 func (w *writer) PushIndent(prefix string) {
+	// have to flush linefeed runs here, because we're about to change
+	// what happens on linefeed!
+	w.handleDelayedLf()
 	if l := len(w.indents); l > 0 {
 		prefix = w.indents[l-1] + prefix
 	}
@@ -173,7 +196,7 @@ func surround(w *writer, prefix string, what []byte, suffix string, escapedChars
 }
 
 func singleline(w *writer, prefix string, buf []byte) {
-	w.EndLine()
+	w.EnsureLinefeeds(1)
 	w.WriteString(prefix)
 	idx := bytes.IndexAny(buf, "\r\n")
 	for idx != -1 {
@@ -183,7 +206,7 @@ func singleline(w *writer, prefix string, buf []byte) {
 		idx = bytes.IndexAny(buf, "\r\n")
 	}
 	w.Write(buf)
-	w.WriteByte('\n')
+	w.EnsureLinefeeds(1)
 }
 
 func renderElement(w *writer, n *html.Node, listIndex int) error {
@@ -242,13 +265,14 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	case atom.Pre:
 		if contents := tryLeafChildText(n); contents != nil {
 			if bytes.Index(contents, []byte("```")) == -1 {
-				w.EndLine()
+				w.EnsureLinefeeds(2)
 				w.WriteString("```\n")
 				w.Verbatim++
 				surround(w, "", contents, "", "")
 				w.Verbatim--
-				w.EndLine()
-				w.WriteString("```\n")
+				w.EnsureLinefeeds(1)
+				w.WriteString("```")
+				w.EnsureLinefeeds(1)
 				return nil
 			}
 		}
@@ -269,7 +293,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 		}
 	case atom.Ol, atom.Ul:
 		if containsOnlyListItems(n) {
-			w.EndLine()
+			w.EnsureLinefeeds(1)
 			i := 0
 			for kid := n.FirstChild; kid != nil; kid = kid.NextSibling {
 				if kid.Type != html.ElementNode {
@@ -299,15 +323,15 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 			w.PushIndent("    ")
 			err := renderContents(w, prefix, n, "")
 			w.PopIndent()
-			w.EndLine()
+			w.EnsureLinefeeds(1)
 			return err
 		}
 	case atom.Blockquote:
-		w.EndLine()
+		w.EnsureLinefeeds(2)
 		w.PushIndent("> ")
 		err := renderContents(w, "> ", n, "")
 		w.PopIndent()
-		w.EndLine()
+		w.EnsureLinefeeds(1)
 		return err
 	}
 
