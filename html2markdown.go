@@ -209,6 +209,15 @@ func singleline(w *writer, prefix string, buf []byte) {
 	w.EnsureLinefeeds(1)
 }
 
+var headingPrefix = [...]string{
+	"# ",
+	"## ",
+	"### ",
+	"#### ",
+	"##### ",
+	"###### ",
+}
+
 func renderElement(w *writer, n *html.Node, listIndex int) error {
 	switch n.Type {
 	case html.ErrorNode:
@@ -229,24 +238,10 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	}
 
 	switch n.DataAtom {
-	case atom.H1:
+	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
+		level := int(n.DataAtom.String()[1] - '1')
 		if t, ok := childText(n); ok {
-			singleline(w, "# ", t)
-			return nil
-		}
-	case atom.H2:
-		if t, ok := childText(n); ok {
-			singleline(w, "## ", t)
-			return nil
-		}
-	case atom.H3:
-		if t, ok := childText(n); ok {
-			singleline(w, "### ", t)
-			return nil
-		}
-	case atom.H4:
-		if t, ok := childText(n); ok {
-			singleline(w, "#### ", t)
+			singleline(w, headingPrefix[level], t)
 			return nil
 		}
 	case atom.Em, atom.I:
@@ -446,10 +441,10 @@ func handleImage(w *writer, node *html.Node) bool {
 	// TODO look at class for alignment
 	out_attrs := ""
 	if style := attr(node, "style"); style != "" {
-		if hasFloatLeft.FindStringIndex(style) != nil {
+		if hasFloatLeft.MatchString(style) {
 			out_attrs += " floatleft"
 		}
-		if hasFloatRight.FindStringIndex(style) != nil {
+		if hasFloatRight.MatchString(style) {
 			out_attrs += " floatright"
 		}
 	}
