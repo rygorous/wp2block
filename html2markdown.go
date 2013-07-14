@@ -14,19 +14,24 @@ type UrlRewriteFunc func(url string) string
 
 func ConvertHtmlToMarkdown(in []byte, rewriteFn UrlRewriteFunc) ([]byte, error) {
 	// parse it!
-	context := &html.Node{
+	body := &html.Node{
 		Type:     html.ElementNode,
 		DataAtom: atom.Body,
 		Data:     "body",
 	}
 
 	reader := bytes.NewReader(in)
-	elems, err := html.ParseFragment(reader, context)
+	elems, err := html.ParseFragment(reader, body)
 	if err != nil {
 		return nil, err
 	}
 	if reader.Len() != 0 {
 		return nil, errors.New("Post couldn't be fully parsed!")
+	}
+
+	// stuff it all into the body node so we have a proper tree.
+	for _, elem := range elems {
+		body.AppendChild(elem)
 	}
 
 	// render it back
@@ -194,7 +199,6 @@ func surround(w *writer, prefix string, what []byte, suffix string, escapedChars
 }
 
 func singleline(w *writer, prefix string, buf []byte) {
-	w.EnsureLinefeeds(1)
 	w.WriteString(prefix)
 	idx := bytes.IndexAny(buf, "\r\n")
 	for idx != -1 {
@@ -204,7 +208,6 @@ func singleline(w *writer, prefix string, buf []byte) {
 		idx = bytes.IndexAny(buf, "\r\n")
 	}
 	w.Write(buf)
-	w.EnsureLinefeeds(1)
 }
 
 var headingPrefix = [...]string{
@@ -221,7 +224,14 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	case html.ErrorNode:
 		return errors.New("html2markdown: Markup contains errors.")
 	case html.TextNode:
-		return handleText(w, n.Data)
+		text := n.Data
+		if isPrevBlockBoundary(n) {
+			text = trimLeftNewline(text)
+		}
+		if isNextBlockBoundary(n) {
+			text = trimRightNewline(text)
+		}
+		return handleText(w, text)
 	case html.ElementNode:
 		// nothing.
 	case html.CommentNode:
@@ -239,7 +249,9 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
 		level := int(n.DataAtom.String()[1] - '1')
 		if t, ok := childText(n); ok {
+			w.EnsureLinefeeds(2)
 			singleline(w, headingPrefix[level], t)
+			w.EnsureLinefeeds(2)
 			return nil
 		}
 	case atom.Em, atom.I:
@@ -265,7 +277,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 				w.Verbatim--
 				w.EnsureLinefeeds(1)
 				w.WriteString("```")
-				w.EnsureLinefeeds(1)
+				w.EnsureLinefeeds(2)
 				return nil
 			}
 		}
@@ -286,7 +298,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 		}
 	case atom.Ol, atom.Ul:
 		if containsOnlyListItems(n) {
-			w.EnsureLinefeeds(1)
+			w.EnsureLinefeeds(2)
 			i := 0
 			for kid := n.FirstChild; kid != nil; kid = kid.NextSibling {
 				if kid.Type != html.ElementNode {
@@ -298,6 +310,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 				}
 				i++
 			}
+			w.EnsureLinefeeds(2)
 
 			return nil
 		}
@@ -564,4 +577,101 @@ func attr(node *html.Node, key string) string {
 		}
 	}
 	return ""
+}
+
+func isBlockLevelElement(node *html.Node) bool {
+	if node.Type != html.ElementNode {
+		return false
+	}
+
+	switch node.DataAtom {
+	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
+		return true
+	case atom.Div, atom.P, atom.Hr, atom.Blockquote, atom.Pre:
+		return true
+	case atom.Ol, atom.Ul, atom.Dl, atom.Dd:
+		return true
+	case atom.Form:
+		return true
+	}
+
+	return false
+}
+
+func isPrevBlockBoundary(node *html.Node) bool {
+	n := node
+
+	// walk up to the first parent that has a prev sibling
+	// if we run into block-level elements along the way,
+	// we've crossed a boundary!
+	for {
+		if isBlockLevelElement(n) {
+			return true
+		}
+		if n.PrevSibling != nil {
+			n = n.PrevSibling
+			break
+		}
+		n = n.Parent
+		if n == nil {
+			return true
+		}
+	}
+
+	// walk down to the leaves and check again if we run
+	// into block-level elements.
+	for n != nil {
+		if isBlockLevelElement(n) {
+			return true
+		}
+		n = n.LastChild
+	}
+
+	return false
+}
+
+func isNextBlockBoundary(node *html.Node) bool {
+	n := node
+
+	// dual to the above function
+	for {
+		if isBlockLevelElement(n) {
+			return true
+		}
+		if n.NextSibling != nil {
+			n = n.NextSibling
+			break
+		}
+		n = n.Parent
+		if n == nil {
+			return true
+		}
+	}
+
+	for n != nil {
+		if isBlockLevelElement(n) {
+			return true
+		}
+		n = n.FirstChild
+	}
+
+	return false
+}
+
+// Strips a newline at the start, but only if it's a single one.
+func trimLeftNewline(text string) string {
+	l := len(text)
+	if l >= 1 && text[0] == '\n' && (l < 2 || text[1] != '\n') {
+		return text[1:]
+	}
+	return text
+}
+
+// Strips a newline at the end, but only if it's a single one.
+func trimRightNewline(text string) string {
+	l := len(text)
+	if l >= 1 && text[l-1] == '\n' && (l < 2 || text[l-2] != '\n') {
+		return text[:l-1]
+	}
+	return text
 }
