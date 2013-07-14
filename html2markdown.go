@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 )
 
 type UrlRewriteFunc func(url string) string
@@ -361,7 +359,7 @@ func handleText(w *writer, text string) error {
 	i := strings.Index(text, latexStart)
 	for i != -1 {
 		// handle bit up to latex math
-		markdownEscape(w, []byte(text[:i]), escapedCharsAll)
+		handleLineBreaks(w, text[:i])
 
 		// find end
 		innerStart := i + len(latexStart)
@@ -375,42 +373,47 @@ func handleText(w *writer, text string) error {
 		innerEnd := end
 		end++
 
-		// find next char after end of math
-		next, _ := utf8.DecodeRuneInString(text[end:])
-
-		// okay, LaTeX block is identified. figure out whether we're
-		// inline or display math.
-		if i == 0 || text[i-1] == '\n' {
-			// If it's at the start of a tag or right after a newline, assume
-			// it's display math.
-			if unicode.IsPunct(next) {
-				// ...but if the next character after the formula is punctuation,
-				// it's probably a formula as a noun in a sentence, so treat it
-				// as inline math that starts with a line break. Unless it's
-				// already a paragraph break, that is!
-				if i < 2 || text[i-2] != '\n' {
-					w.WriteString("<br>")
-				}
-				w.WriteString("$$")
-				w.WriteString(text[innerStart:innerEnd])
-				w.WriteString("$$")
-			} else {
-				w.WriteString("$$[")
-				w.WriteString(text[innerStart:innerEnd])
-				w.WriteString("$$]")
-			}
-		} else {
-			w.WriteString("$$")
-			w.WriteString(text[innerStart:innerEnd])
-			w.WriteString("$$")
-		}
+		// convert into inline math
+		w.WriteString("$$")
+		w.WriteString(text[innerStart:innerEnd])
+		w.WriteString("$$")
 
 		text = text[end:]
 		i = strings.Index(text, latexStart)
 	}
 
-	markdownEscape(w, []byte(text), escapedCharsAll)
+	handleLineBreaks(w, text)
 	return nil
+}
+
+func handleLineBreaks(w *writer, text string) {
+	// Handle line breaks:
+	// single \n -> <br>
+	// at least two: -> paragraph break. (\n\n in Markdown)
+	i := strings.Index(text, "\n")
+	for i != -1 {
+		// handle bit up to newline
+		markdownEscape(w, []byte(text[:i]), escapedCharsAll)
+
+		// figure out the end of this run of newlines
+		end := i + 1
+		for end < len(text) && text[end] == '\n' {
+			end++
+		}
+
+		if end == i+1 {
+			// single line break
+			w.WriteString("\n<br>")
+		} else {
+			// paragraph break
+			w.WriteString("\n\n")
+		}
+
+		text = text[end:]
+		i = strings.Index(text, "\n")
+	}
+
+	markdownEscape(w, []byte(text), escapedCharsAll)
 }
 
 var (
