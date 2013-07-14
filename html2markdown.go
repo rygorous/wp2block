@@ -377,7 +377,11 @@ func handleText(w *writer, text string) error {
 		// find end
 		innerStart := i + len(latexStart)
 		end := innerStart
-		for end < len(text) && (text[end-1] == '\\' || text[end] != '$') {
+		for end < len(text) && text[end] != '$' {
+			if text[end] == '\\' {
+				// might be escape: skip next char
+				end++
+			}
 			end++
 		}
 		if end == len(text) {
