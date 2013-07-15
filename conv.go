@@ -270,7 +270,7 @@ func save(blog *Blog, dest string) error {
 }
 
 func main() {
-	r, err := readWxr("c:\\Store\\Downloads\\therygblog.wordpress.2013-07-06.xml")
+	r, err := readWxr("c:\\Store\\Downloads\\therygblog.wordpress.2013-07-15.xml")
 	if err != nil {
 		fmt.Printf("Error reading WXR: %s\n", err.Error())
 		return
