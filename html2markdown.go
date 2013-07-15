@@ -392,6 +392,10 @@ func handleText(w *writer, text string) error {
 
 		// convert into inline math
 		w.WriteString("$$")
+		if text[innerStart] == '[' {
+			// don't want to accidentally produce a $$[
+			w.WriteByte(' ')
+		}
 		w.WriteString(text[innerStart:innerEnd])
 		w.WriteString("$$")
 
