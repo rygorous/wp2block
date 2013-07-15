@@ -270,6 +270,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	case atom.Pre:
 		if contents := tryLeafChildText(n); contents != nil {
 			if bytes.Index(contents, []byte("```")) == -1 {
+				contents = tabsToSpaces(contents, 8)
 				w.EnsureLinefeeds(2)
 				w.WriteString("```\n")
 				w.Verbatim++
@@ -682,4 +683,35 @@ func trimRightNewline(text string) string {
 		return text[:l-1]
 	}
 	return text
+}
+
+func tabsToSpaces(in []byte, tabsize int) []byte {
+	if bytes.IndexByte(in, '\t') == -1 {
+		return in
+	}
+
+	spaces := bytes.Repeat([]byte(" "), tabsize)
+
+	var out []byte
+	i := bytes.IndexAny(in, "\n\r\f\t")
+	col := 0
+
+	for i != -1 {
+		out = append(out, in[:i]...)
+		col += i
+		if in[i] == '\t' {
+			nspaces := tabsize - (col % tabsize)
+			out = append(out, spaces[:nspaces]...)
+			col += nspaces
+		} else {
+			// line feed
+			out = append(out, in[i])
+			col = 0
+		}
+
+		in = in[i+1:]
+		i = bytes.IndexAny(in, "\n\r\f\t")
+	}
+
+	return append(out, in...)
 }
