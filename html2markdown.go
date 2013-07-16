@@ -361,8 +361,9 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 			surround(w, start, text, "$$", "")
 			return nil
 		case "caption":
-			// TODO handle!!
-			return nil
+			// TODO actually do something with the caption attributes!
+			err := renderContents(w, "", n, "")
+			return err
 		default:
 			return fmt.Errorf("unhandled shortcode %q", n.Data)
 		}
