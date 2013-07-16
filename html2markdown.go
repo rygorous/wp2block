@@ -6,6 +6,7 @@ import (
 	"code.google.com/p/go.net/html/atom"
 	"errors"
 	"fmt"
+	"github.com/rygorous/wp2block/shortcode"
 	"regexp"
 	"strings"
 )
@@ -34,9 +35,15 @@ func ConvertHtmlToMarkdown(in []byte, rewriteFn UrlRewriteFunc) ([]byte, error) 
 		body.AppendChild(elem)
 	}
 
+	// process shortcodes and WP-LaTeX markup.
+	if err = shortcode.ProcessShortcodes(body); err != nil {
+		return nil, err
+	}
+	shortcode.ProcessWpLatex(body)
+
 	// render it back
 	wr := &writer{RewriteUrl: rewriteFn}
-	for _, elem := range elems {
+	for elem := body.FirstChild; elem != nil; elem = elem.NextSibling {
 		err = renderElement(wr, elem, -1)
 		if err != nil {
 			return nil, err
@@ -342,6 +349,25 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 		return err
 	}
 
+	if n.Namespace == shortcode.Namespace {
+		switch n.Data {
+		case "latex":
+			text := leafChildText(n)
+			start := "$$"
+			if len(text) > 0 && text[0] == '[' {
+				// don't want to accidentally produce a $$[
+				start = "$$ "
+			}
+			surround(w, start, text, "$$", "")
+			return nil
+		case "caption":
+			// TODO handle!!
+			return nil
+		default:
+			return fmt.Errorf("unhandled shortcode %q", n.Data)
+		}
+	}
+
 	// By default, fall back to rendering as HTML
 	w.Verbatim++
 	err := html.Render(w, n)
@@ -366,49 +392,7 @@ func childText(node *html.Node) ([]byte, bool) {
 	return wr.Bytes(), err == nil
 }
 
-var latexStart = "$latex "
-
 func handleText(w *writer, text string) error {
-	// find LaTeX math
-	i := strings.Index(text, latexStart)
-	for i != -1 {
-		// handle bit up to latex math
-		handleLineBreaks(w, text[:i])
-
-		// find end
-		innerStart := i + len(latexStart)
-		end := innerStart
-		for end < len(text) && text[end] != '$' {
-			if text[end] == '\\' {
-				// might be escape: skip next char
-				end++
-			}
-			end++
-		}
-		if end == len(text) {
-			break
-		}
-		innerEnd := end
-		end++
-
-		// convert into inline math
-		w.WriteString("$$")
-		if text[innerStart] == '[' {
-			// don't want to accidentally produce a $$[
-			w.WriteByte(' ')
-		}
-		w.WriteString(text[innerStart:innerEnd])
-		w.WriteString("$$")
-
-		text = text[end:]
-		i = strings.Index(text, latexStart)
-	}
-
-	handleLineBreaks(w, text)
-	return nil
-}
-
-func handleLineBreaks(w *writer, text string) {
 	// Handle line breaks:
 	// single \n -> <br>
 	// at least two: -> paragraph break. (\n\n in Markdown)
@@ -436,6 +420,7 @@ func handleLineBreaks(w *writer, text string) {
 	}
 
 	markdownEscape(w, []byte(text), escapedCharsAll)
+	return nil
 }
 
 var (
