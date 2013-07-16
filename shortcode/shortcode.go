@@ -7,6 +7,8 @@ import (
 	"unicode/utf8"
 )
 
+var Namespace = "wp"
+
 // Takes a html.Node tree that contains shortcode markup and converts
 // all shortcodes to proper nodes in the parse tree. Shortcode tags
 // have a namespace of "wp" ("Wordpress").
@@ -17,6 +19,15 @@ func ProcessShortcodes(node *html.Node) error {
 
 	cleanupTree(node)
 	return nil
+}
+
+// Takes a html.Node tree that contains WP-LaTeX markup and converts
+// $latex .. $ markup to wp:latex nodes in the parse tree, same as
+// if they were written using shortcodes. There is no shortcode markup
+// allowed inside $latex blocks, so this is relatively easy.
+func ProcessWpLatex(node *html.Node) {
+	processLatexNode(node)
+	cleanupTree(node)
 }
 
 // Is a given shortcode a block or a standalone tag?
@@ -105,6 +116,67 @@ func processTextNode(node *html.Node, tags []openTag) (outTags []openTag, next *
 	return
 }
 
+func processLatexNode(node *html.Node) {
+	n := node.FirstChild
+	for n != nil {
+		next := n.NextSibling
+		switch n.Type {
+		case html.TextNode:
+			next = processLatexTextNode(n)
+		case html.ElementNode:
+			processLatexNode(n)
+		}
+
+		n = next
+	}
+}
+
+var latexStart = "$latex "
+
+func processLatexTextNode(node *html.Node) *html.Node {
+	// find occurence of $latex marker
+	if i := strings.Index(node.Data, latexStart); i != -1 {
+		// find end "$" marker
+		innerStart := i + len(latexStart)
+		end := innerStart
+		for end < len(node.Data) && node.Data[end] != '$' {
+			if node.Data[end] == '\\' {
+				// might be escape: skip next char
+				end++
+			}
+			end++
+		}
+		// Note: if we don't have a terminating $, that means we
+		// also can't have another $latex in this node, so there's
+		// no need to loop in this function.
+		if end < len(node.Data) {
+			innerEnd := end
+			end++
+
+			// Create a node for the LaTeX tag
+			tagnode := &html.Node{
+				Type:      html.ElementNode,
+				Data:      "latex",
+				Namespace: Namespace,
+			}
+			tagnode.AppendChild(&html.Node{
+				Type: html.TextNode,
+				Data: node.Data[innerStart:innerEnd],
+			})
+
+			// Split the source code around the LaTeX tag,
+			// insert the node, and continue processing with
+			// the right half.
+			next := splitTextNode(node, i, end)
+			node.Parent.InsertBefore(tagnode, next)
+
+			return next
+		}
+	}
+
+	return node.NextSibling
+}
+
 func handleShortcode(node *html.Node, tags []openTag, tagStart, tagEnd, openClose int, tag, rest string) (outTags []openTag, next *html.Node, err error) {
 	// Split the text node, cutting out the tag
 	next = splitTextNode(node, tagStart, tagEnd)
@@ -114,7 +186,7 @@ func handleShortcode(node *html.Node, tags []openTag, tagStart, tagEnd, openClos
 		tagnode := &html.Node{
 			Type:      html.ElementNode,
 			Data:      tag,
-			Namespace: "wp",
+			Namespace: Namespace,
 		}
 		parseAttrs(tagnode, rest)
 		node.Parent.InsertBefore(tagnode, next)
