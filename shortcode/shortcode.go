@@ -7,6 +7,9 @@ import (
 	"unicode/utf8"
 )
 
+// Takes a html.Node tree that contains shortcode markup and converts
+// all shortcodes to proper nodes in the parse tree. Shortcode tags
+// have a namespace of "wp" ("Wordpress").
 func ProcessShortcodes(node *html.Node) error {
 	if err := processNode(node); err != nil {
 		return err
@@ -122,8 +125,10 @@ func handleShortcode(node *html.Node, tags []openTag, tagStart, tagEnd, openClos
 	// On tag close, pop node and verify that it is correctly matched
 	if openClose&tagClose != 0 {
 		l := len(tags)
-		if l == 0 || tags[l-1].tag != tag {
-			err = fmt.Errorf("shortcode: unexpected closing shortcode '%s'", tag)
+		if l == 0 {
+			err = fmt.Errorf("closing shortcode '%s' while no shortcodes are open", tag)
+		} else if tags[l-1].tag != tag {
+			err = fmt.Errorf("shortcode: unexpected closing shortcode '%s', '%s' is still open.", tag, tags[l-1].tag)
 			return
 		}
 		tags = tags[:l-1]
@@ -134,15 +139,15 @@ func handleShortcode(node *html.Node, tags []openTag, tagStart, tagEnd, openClos
 }
 
 // These functions match Perl character classes.
-func isspace(ch byte) bool {
+func isSpace(ch byte) bool {
 	return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f'
 }
 
-func isword(ch byte) bool {
+func isWord(ch byte) bool {
 	return ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '_'
 }
 
-func isshortname(ch byte) bool {
+func isShortname(ch byte) bool {
 	return ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '_' || ch == '-'
 }
 
@@ -155,14 +160,15 @@ const (
 func parseShortcode(text string) (size, openClose int, tag, rest string) {
 	pos := 0
 	startEscape := false
-	if len(text) > 0 && text[0] == '[' {
+	if pos < len(text) && text[pos] == '[' {
 		startEscape = true
-		pos = 1
+		pos++
 	}
 
 	// is this a closing tag?
 	if pos < len(text) && text[pos] == '/' {
 		openClose |= tagClose
+		pos++
 	} else {
 		openClose |= tagOpen
 	}
@@ -170,7 +176,7 @@ func parseShortcode(text string) (size, openClose int, tag, rest string) {
 	// scan the tag name
 	namestart := pos
 	nameend := pos + 1
-	for nameend < len(text) && isshortname(text[nameend]) {
+	for nameend < len(text) && isShortname(text[nameend]) {
 		nameend++
 	}
 
@@ -217,7 +223,93 @@ func parseShortcode(text string) (size, openClose int, tag, rest string) {
 	return
 }
 
+func countSpaces(str string) int {
+	n := 0
+	for n < len(str) && isSpace(str[n]) {
+		n++
+	}
+	return n
+}
+
 func parseAttrs(node *html.Node, attrs string) {
+	keyIdx := 0
+	pos := 0
+	for pos < len(attrs) {
+		pos += countSpaces(attrs[pos:])
+		if pos >= len(attrs) {
+			break
+		}
+
+		// try to parse key name
+		keyStart, keyEnd := pos, pos
+		for keyEnd < len(attrs) && isWord(attrs[keyEnd]) {
+			keyEnd++
+		}
+
+		eqPos := keyEnd + countSpaces(attrs[keyEnd:])
+		if eqPos < len(attrs) && attrs[eqPos] == '=' {
+			// looks like a key-value pair
+			var innerPos, innerEnd int
+			valPos := eqPos + 1 + countSpaces(attrs[eqPos+1:])
+			valEnd := valPos
+
+			if valPos < len(attrs) {
+				// quoted attrib?
+				if attrs[valPos] == '"' || attrs[valPos] == '\'' {
+					innerEnd = valPos + 1 + strings.IndexRune(attrs[valPos+1:], rune(attrs[valPos]))
+					if innerEnd > valPos {
+						innerPos, valEnd = valPos+1, innerEnd+1
+					}
+				}
+
+				// unquoted attrib?
+				if valEnd == valPos {
+					for valEnd < len(attrs) && !isSpace(attrs[valEnd]) && attrs[valEnd] != '"' && attrs[valEnd] != '\'' {
+						valEnd++
+					}
+					innerPos = valPos
+					innerEnd = valEnd
+				}
+
+				// if we have a value, add it to the node!
+				if valEnd != valPos {
+					node.Attr = append(node.Attr, html.Attribute{
+						Key: attrs[keyStart:keyEnd],
+						Val: attrs[innerPos:innerEnd],
+					})
+					pos = valEnd
+					continue
+				}
+			}
+		}
+
+		// key-value pair didn't work out. try parsing as indexed value
+		var innerPos, innerEnd int
+		end := pos
+
+		// quoted value?
+		if attrs[pos] == '"' {
+			innerEnd = pos + 1 + strings.IndexRune(attrs[pos+1:], '"')
+			if innerEnd > pos {
+				innerPos, end = pos+1, innerEnd+1
+			}
+		}
+
+		// if all else fails, try regular value
+		if end == pos {
+			for end < len(attrs) && !isSpace(attrs[end]) {
+				end++
+			}
+			innerPos, innerEnd = pos, end
+		}
+
+		node.Attr = append(node.Attr, html.Attribute{
+			Key: fmt.Sprintf("@%d", keyIdx),
+			Val: attrs[innerPos:innerEnd],
+		})
+		pos = end
+		keyIdx++
+	}
 }
 
 // Splits the html.TextNode "node" into two nodes: one that holds
