@@ -45,7 +45,8 @@ type Author struct {
 type Doc struct {
 	Id              string
 	Title           string
-	Content         []byte
+	Content         []byte // output markdown
+	ContentHtml     []byte // original HTML code
 	Type            DocType
 	Status          DocStatus
 	PublishedDate   time.Time
@@ -78,21 +79,10 @@ func buildDocFor(item *wxr.Item) *Doc {
 		name = generatePostId(item.Title)
 	}
 
-	fmt.Printf("doc: %s\n", item.Title)
-	urlRewrite := func(url string) string {
-		//fmt.Printf("  %s\n", url)
-		return url
-	}
-
-	markdown, err := ConvertHtmlToMarkdown(item.Content, urlRewrite)
-	if err != nil {
-		log.Fatalf("%q (%d): Error converting contents to markdown: %s\n", item.Title, item.PostId, err.Error())
-	}
-
 	return &Doc{
 		Id:              name,
 		Title:           item.Title,
-		Content:         markdown,
+		ContentHtml:     item.Content,
 		Type:            typ,
 		Status:          parseDocStatus(item.Status),
 		PublishedDate:   parseWpTime(item.PostDateGmt),
@@ -140,6 +130,21 @@ func convert(channel *wxr.Channel) *Blog {
 				Parent: parentDoc,
 				Url:    item.AttachmentUrl,
 			})
+		}
+	}
+
+	// Generate markdown for docs
+	for _, doc := range blog.Docs {
+		fmt.Printf("doc: %s\n", doc.Title)
+		urlRewrite := func(url string) string {
+			//fmt.Printf("  %s\n", url)
+			return url
+		}
+
+		var err error
+		doc.Content, err = ConvertHtmlToMarkdown(doc.ContentHtml, urlRewrite)
+		if err != nil {
+			log.Fatalf("%q: Error converting contents to markdown: %s\n", doc.Title, err.Error())
 		}
 	}
 
@@ -248,7 +253,7 @@ func writePost(wr io.Writer, doc *Doc) error {
 }
 
 func save(blog *Blog, dest string) error {
-	if err := os.MkdirAll(dest, 0733); err != nil {
+	if err := os.MkdirAll(filepath.Join(dest, "wpmedia"), 0733); err != nil {
 		return err
 	}
 
