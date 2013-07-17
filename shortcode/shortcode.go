@@ -33,8 +33,9 @@ func ProcessWpLatex(node *html.Node) {
 // Is a given shortcode a block or a standalone tag?
 // This also serves as master array of shortcode types.
 var shortcodeIsBlock = map[string]bool{
-	"caption": true,
-	"latex":   true,
+	"caption":    true,
+	"wp_caption": true,
+	"latex":      true,
 }
 
 type openTag struct {

@@ -68,6 +68,14 @@ func (w *writer) Bytes() []byte {
 	return w.out.Bytes()
 }
 
+func (w *writer) String() string {
+	return w.out.String()
+}
+
+func (w *writer) Clone() *writer {
+	return &writer{RewriteUrl: w.RewriteUrl}
+}
+
 func (w *writer) handleDelayedLf() {
 	for w.lfRunCounter < w.lfRunTarget {
 		w.WriteByte('\n')
@@ -255,7 +263,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	switch n.DataAtom {
 	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
 		level := int(n.DataAtom.String()[1] - '1')
-		if t, ok := childText(n); ok {
+		if t, ok := childText(w, n); ok {
 			w.EnsureLinefeeds(2)
 			singleline(w, headingPrefix[level], t)
 			w.EnsureLinefeeds(2)
@@ -360,10 +368,8 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 			}
 			surround(w, start, text, "$$", "")
 			return nil
-		case "caption":
-			// TODO actually do something with the caption attributes!
-			err := renderContents(w, "", n, "")
-			return err
+		case "caption", "wp_caption":
+			return handleWpCaption(w, n)
 		default:
 			return fmt.Errorf("unhandled shortcode %q", n.Data)
 		}
@@ -387,9 +393,9 @@ func renderContents(w *writer, prefix string, node *html.Node, suffix string) er
 	return nil
 }
 
-func childText(node *html.Node) ([]byte, bool) {
-	var wr writer
-	err := renderContents(&wr, "", node, "")
+func childText(w *writer, node *html.Node) ([]byte, bool) {
+	wr := w.Clone()
+	err := renderContents(wr, "", node, "")
 	return wr.Bytes(), err == nil
 }
 
@@ -421,6 +427,55 @@ func handleText(w *writer, text string) error {
 	}
 
 	markdownEscape(w, []byte(text), escapedCharsAll)
+	return nil
+}
+
+func handleWpCaption(w *writer, node *html.Node) error {
+	if err := checkWpCaption(node); err != nil {
+		return err
+	}
+
+	var renderEnd *html.Node
+	var caption string
+	if !hasAttr(node, "caption") {
+		// New-style caption - render contents to string
+		wr := w.Clone()
+		renderEnd = node.FirstChild.NextSibling
+		for n := renderEnd; n != nil; n = n.NextSibling {
+			if err := renderElement(wr, n, -1); err != nil {
+				return err
+			}
+		}
+		caption = strings.TrimSpace(wr.String())
+	} else {
+		// Old-style caption is an attribute
+		caption = attr(node, "caption")
+	}
+
+	// TODO handle other attributes!
+	w.WriteString("{% figure %}")
+	for n := node.FirstChild; n != renderEnd; n = n.NextSibling {
+		if err := renderContents(w, "", n, ""); err != nil {
+			return err
+		}
+	}
+	w.WriteString("{% figcaption %}")
+	w.WriteString(caption)
+	w.WriteString("{% endfigcaption %}{% endfigure %}")
+
+	return nil
+}
+
+func checkWpCaption(node *html.Node) error {
+	kid := node.FirstChild
+	if kid != nil && kid.Type == html.ElementNode && kid.DataAtom == atom.A {
+		// Links, we may descend.
+		kid = kid.FirstChild
+	}
+	if kid == nil || kid.Type != html.ElementNode || kid.DataAtom != atom.Img {
+		return errors.New("The content of Wordpress caption shortcodes must start with an image, possibly nested inside a link.")
+	}
+
 	return nil
 }
 
@@ -563,6 +618,15 @@ func hasOnlyAllowedAttrs(node *html.Node, allowed map[string]bool) bool {
 		}
 	}
 	return true
+}
+
+func hasAttr(node *html.Node, key string) bool {
+	for _, attr := range node.Attr {
+		if attr.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 func attr(node *html.Node, key string) string {
