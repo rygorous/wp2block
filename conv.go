@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,6 +107,7 @@ func convert(channel *wxr.Channel) *Blog {
 	// First pass: handle regular docs
 	idsTaken := make(map[string]*Doc)
 	docsByWpId := make(map[int]*Doc)
+	docsByLink := make(map[string]*Doc)
 	for _, item := range channel.Items {
 		if doc := buildDocFor(item); doc != nil {
 			// NOTE: We can resolve ID collisions by just reassigning them to *make*
@@ -115,6 +117,7 @@ func convert(channel *wxr.Channel) *Blog {
 			}
 			idsTaken[doc.Id] = doc
 			docsByWpId[item.PostId] = doc
+			docsByLink[item.Link] = doc
 			blog.Docs = append(blog.Docs, doc)
 		}
 	}
@@ -136,9 +139,21 @@ func convert(channel *wxr.Channel) *Blog {
 	// Generate markdown for docs
 	for _, doc := range blog.Docs {
 		fmt.Printf("doc: %s\n", doc.Title)
-		urlRewrite := func(url string) string {
-			//fmt.Printf("  %s\n", url)
-			return url
+		urlRewrite := func(target string) string {
+			parsed, err := url.Parse(target)
+			if err != nil {
+				return target
+			}
+			canonical := url.URL{
+				Scheme: parsed.Scheme,
+				Host:   parsed.Host,
+				Path:   parsed.Path,
+			}
+			canonicalUrl := canonical.String()
+			if tgtDoc := docsByLink[canonicalUrl]; tgtDoc != nil {
+				fmt.Printf("  -> %s\n", tgtDoc.Title)
+			}
+			return target
 		}
 
 		var err error
