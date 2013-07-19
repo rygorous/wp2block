@@ -748,7 +748,7 @@ func tabsToSpaces(in []byte, tabsize int) []byte {
 
 	for i != -1 {
 		out = append(out, in[:i]...)
-		col += i
+		col += utf8.RuneCount(in[:i])
 		if in[i] == '\t' {
 			nspaces := tabsize - (col % tabsize)
 			out = append(out, spaces[:nspaces]...)
