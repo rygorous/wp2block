@@ -140,18 +140,27 @@ func convert(channel *wxr.Channel) *Blog {
 	for _, doc := range blog.Docs {
 		fmt.Printf("doc: %s\n", doc.Title)
 		urlRewrite := func(target string) string {
-			parsed, err := url.Parse(target)
-			if err != nil {
-				return target
+			if parsed, err := url.Parse(target); err == nil {
+				canonical := url.URL{
+					Scheme: parsed.Scheme,
+					Host:   parsed.Host,
+					Path:   parsed.Path,
+				}
+				canonicalUrl := canonical.String()
+				if tgtDoc := docsByLink[canonicalUrl]; tgtDoc != nil {
+					dest := "*" + tgtDoc.Id
+					if parsed.Fragment != "" {
+						dest += "#" + parsed.Fragment
+					}
+					fmt.Printf("  -> %s\n", tgtDoc.Title)
+					return dest
+				}
 			}
-			canonical := url.URL{
-				Scheme: parsed.Scheme,
-				Host:   parsed.Host,
-				Path:   parsed.Path,
-			}
-			canonicalUrl := canonical.String()
-			if tgtDoc := docsByLink[canonicalUrl]; tgtDoc != nil {
-				fmt.Printf("  -> %s\n", tgtDoc.Title)
+			// debug only!
+			if strings.HasPrefix(target, "http://fgiesen.") {
+				if !strings.HasPrefix(target, "http://fgiesen.files") {
+					fmt.Printf("  unresolved self-link %q\n", target)
+				}
 			}
 			return target
 		}
