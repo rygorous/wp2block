@@ -147,12 +147,16 @@ func convert(channel *wxr.Channel) *Blog {
 					Path:   parsed.Path,
 				}
 				canonicalUrl := canonical.String()
-				if tgtDoc := docsByLink[canonicalUrl]; tgtDoc != nil {
+				tgtDoc := docsByLink[canonicalUrl]
+				if tgtDoc == nil && !strings.HasSuffix(canonicalUrl, "/") {
+					tgtDoc = docsByLink[canonicalUrl+"/"]
+				}
+				if tgtDoc != nil {
 					dest := "*" + tgtDoc.Id
 					if parsed.Fragment != "" {
 						dest += "#" + parsed.Fragment
 					}
-					fmt.Printf("  -> %s\n", tgtDoc.Title)
+					//fmt.Printf("  -> %s\n", tgtDoc.Title)
 					return dest
 				}
 			}
