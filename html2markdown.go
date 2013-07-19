@@ -9,6 +9,7 @@ import (
 	"github.com/rygorous/wp2block/shortcode"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 type UrlRewriteFunc func(url string) string
