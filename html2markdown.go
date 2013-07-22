@@ -356,6 +356,14 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 		w.PopIndent()
 		w.EnsureLinefeeds(1)
 		return err
+	case atom.P:
+		w.EnsureLinefeeds(2)
+		err := renderContents(w, "", n, "")
+		w.EnsureLinefeeds(1)
+		return err
+	case atom.Sub, atom.Sup, atom.Strike, atom.Del, atom.Ins:
+		// HTML tags we just pass through
+		return renderContents(w, "<"+n.Data+">", n, "</"+n.Data+">")
 	}
 
 	if n.Namespace == shortcode.Namespace {
@@ -378,6 +386,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 
 	// By default, fall back to rendering as HTML
 	w.Verbatim++
+	//fmt.Printf("unhandled %s\n", n.Data)
 	err := html.Render(w, n)
 	w.Verbatim--
 	return err
