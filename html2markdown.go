@@ -12,9 +12,11 @@ import (
 	"unicode/utf8"
 )
 
-type UrlRewriteFunc func(url string) string
+type UrlRewriter interface {
+	UrlRewrite(url string) string
+}
 
-func ConvertHtmlToMarkdown(in []byte, rewriteFn UrlRewriteFunc) ([]byte, error) {
+func ConvertHtmlToMarkdown(in []byte, rewriteUrl UrlRewriter) ([]byte, error) {
 	// parse it!
 	body := &html.Node{
 		Type:     html.ElementNode,
@@ -43,7 +45,7 @@ func ConvertHtmlToMarkdown(in []byte, rewriteFn UrlRewriteFunc) ([]byte, error) 
 	shortcode.ProcessWpLatex(body)
 
 	// render it back
-	wr := &writer{RewriteUrl: rewriteFn}
+	wr := &writer{RewriteUrl: rewriteUrl}
 	for elem := body.FirstChild; elem != nil; elem = elem.NextSibling {
 		err = renderElement(wr, elem, -1)
 		if err != nil {
@@ -57,7 +59,7 @@ func ConvertHtmlToMarkdown(in []byte, rewriteFn UrlRewriteFunc) ([]byte, error) 
 
 type writer struct {
 	Verbatim   int // if >0, don't do any processing on output newlines
-	RewriteUrl UrlRewriteFunc
+	RewriteUrl UrlRewriter
 
 	lfRunCounter int // length of the current run of line feeds written
 	lfRunTarget  int // target length of current run of line feeds
@@ -302,7 +304,7 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 		if isSimpleLink(n) {
 			text := leafChildText(n)
 			href := attr(n, "href")
-			href = w.RewriteUrl(href)
+			href = w.RewriteUrl.UrlRewrite(href)
 			surround(w, "[", text, "]", "[]")
 			surround(w, "(", []byte(href), ")", "()")
 			return nil
@@ -512,7 +514,7 @@ func handleImage(w *writer, node *html.Node) bool {
 	alt := attr(node, "alt")
 	title := attr(node, "title")
 
-	url = w.RewriteUrl(url)
+	url = w.RewriteUrl.UrlRewrite(url)
 
 	// TODO look at class for alignment
 	out_attrs := ""

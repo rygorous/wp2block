@@ -9,8 +9,10 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -31,11 +33,14 @@ const (
 	StatusDraft
 	StatusPending
 	StatusPrivate
+
+	mediaPath = "wpmedia"
 )
 
 type Blog struct {
-	Author Author
-	Docs   []*Doc
+	Author      Author
+	Docs        []*Doc
+	Attachments []*Attachment
 }
 
 type Author struct {
@@ -52,12 +57,12 @@ type Doc struct {
 	Status          DocStatus
 	PublishedDate   time.Time
 	CommentsEnabled bool
-	Attachments     []*Attachment
 }
 
 type Attachment struct {
-	Parent *Doc
-	Url    string
+	Parent   *Doc
+	Url      string // Url on the Wordpress site
+	Filename string // Local media file name
 }
 
 var docType = map[string]DocType{
@@ -91,6 +96,84 @@ func buildDocFor(item *wxr.Item) *Doc {
 	}
 }
 
+type urlRewriter struct {
+	docsByUrl    map[string]*Doc
+	attsByUrl    map[string]*Attachment
+	filenameUsed map[string]bool
+}
+
+func (u *urlRewriter) UrlRewrite(target string) string {
+	if parsed, err := url.Parse(target); err == nil {
+		canonical := url.URL{
+			Scheme: parsed.Scheme,
+			Host:   parsed.Host,
+			Path:   parsed.Path,
+		}
+		canonicalUrl := canonical.String()
+		// try to look up as a doc
+		tgtDoc := u.docsByUrl[canonicalUrl]
+		if tgtDoc == nil && !strings.HasSuffix(canonicalUrl, "/") {
+			tgtDoc = u.docsByUrl[canonicalUrl+"/"]
+		}
+		if tgtDoc != nil {
+			dest := "*" + tgtDoc.Id
+			if parsed.Fragment != "" {
+				dest += "#" + parsed.Fragment
+			}
+			//fmt.Printf("  -> %s\n", tgtDoc.Title)
+			return dest
+		}
+		// try to look up as attachment
+		tgtAtt := u.attsByUrl[canonicalUrl]
+		if tgtAtt != nil {
+			u.useAttachment(tgtAtt)
+			return mediaPath + "/" + tgtAtt.Filename
+		}
+	}
+	// debug only!
+	if strings.HasPrefix(target, "http://fgiesen.") {
+		fmt.Printf("  unresolved self-link %q\n", target)
+	}
+	return target
+}
+
+func (u *urlRewriter) useAttachment(a *Attachment) {
+	// if we've already assigned a file name, we're good!
+	if a.Filename != "" {
+		return
+	}
+
+	parsed, err := url.Parse(a.Url)
+	if err != nil {
+		log.Fatalf("Can't parse attachment URL %q", a.Url)
+	}
+
+	// try original name
+	basename := path.Base(parsed.Path)
+	if u.tryAttachmentFilename(a, basename) {
+		return
+	}
+
+	// if that didn't work, just keep trying random 32-bit prefixes to
+	// make it unique
+	for {
+		name := fmt.Sprintf("%08x_%s", rand.Uint32(), basename)
+		if u.tryAttachmentFilename(a, name) {
+			break
+		}
+	}
+}
+
+func (u *urlRewriter) tryAttachmentFilename(a *Attachment, filename string) bool {
+	namel := strings.ToLower(filename)
+	if !u.filenameUsed[namel] {
+		a.Filename = filename
+		u.filenameUsed[namel] = true
+		return true
+	}
+	return false
+}
+
 func convert(channel *wxr.Channel) *Blog {
 	if len(channel.Authors) > 1 {
 		log.Fatalf("Only one author supported right now.\n")
@@ -105,9 +188,13 @@ func convert(channel *wxr.Channel) *Blog {
 	}
 
 	// First pass: handle regular docs
+	var rewriter urlRewriter
+
 	idsTaken := make(map[string]*Doc)
 	docsByWpId := make(map[int]*Doc)
-	docsByLink := make(map[string]*Doc)
+	rewriter.docsByUrl = make(map[string]*Doc)
+	rewriter.attsByUrl = make(map[string]*Attachment)
+	rewriter.filenameUsed = make(map[string]bool)
 	for _, item := range channel.Items {
 		if doc := buildDocFor(item); doc != nil {
 			// NOTE: We can resolve ID collisions by just reassigning them to *make*
@@ -117,7 +204,7 @@ func convert(channel *wxr.Channel) *Blog {
 			}
 			idsTaken[doc.Id] = doc
 			docsByWpId[item.PostId] = doc
-			docsByLink[item.Link] = doc
+			rewriter.docsByUrl[item.Link] = doc
 			blog.Docs = append(blog.Docs, doc)
 		}
 	}
@@ -129,48 +216,21 @@ func convert(channel *wxr.Channel) *Blog {
 			if !ok {
 				log.Fatalf("Attachment %d refers to unknown parent %d.\n", item.PostId, item.PostParent)
 			}
-			parentDoc.Attachments = append(parentDoc.Attachments, &Attachment{
+			att := &Attachment{
 				Parent: parentDoc,
 				Url:    item.AttachmentUrl,
-			})
+			}
+			rewriter.attsByUrl[att.Url] = att
+			blog.Attachments = append(blog.Attachments, att)
 		}
 	}
 
 	// Generate markdown for docs
 	for _, doc := range blog.Docs {
-		fmt.Printf("doc: %s\n", doc.Title)
-		urlRewrite := func(target string) string {
-			if parsed, err := url.Parse(target); err == nil {
-				canonical := url.URL{
-					Scheme: parsed.Scheme,
-					Host:   parsed.Host,
-					Path:   parsed.Path,
-				}
-				canonicalUrl := canonical.String()
-				tgtDoc := docsByLink[canonicalUrl]
-				if tgtDoc == nil && !strings.HasSuffix(canonicalUrl, "/") {
-					tgtDoc = docsByLink[canonicalUrl+"/"]
-				}
-				if tgtDoc != nil {
-					dest := "*" + tgtDoc.Id
-					if parsed.Fragment != "" {
-						dest += "#" + parsed.Fragment
-					}
-					//fmt.Printf("  -> %s\n", tgtDoc.Title)
-					return dest
-				}
-			}
-			// debug only!
-			if strings.HasPrefix(target, "http://fgiesen.") {
-				if !strings.HasPrefix(target, "http://fgiesen.files") {
-					fmt.Printf("  unresolved self-link %q\n", target)
-				}
-			}
-			return target
-		}
+		//fmt.Printf("doc: %s\n", doc.Title)
 
 		var err error
-		doc.Content, err = ConvertHtmlToMarkdown(doc.ContentHtml, urlRewrite)
+		doc.Content, err = ConvertHtmlToMarkdown(doc.ContentHtml, &rewriter)
 		if err != nil {
 			log.Fatalf("%q: Error converting contents to markdown: %s\n", doc.Title, err.Error())
 		}
@@ -281,7 +341,7 @@ func writePost(wr io.Writer, doc *Doc) error {
 }
 
 func save(blog *Blog, dest string) error {
-	if err := os.MkdirAll(filepath.Join(dest, "wpmedia"), 0733); err != nil {
+	if err := os.MkdirAll(filepath.Join(dest, mediaPath), 0733); err != nil {
 		return err
 	}
 
