@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -340,11 +341,45 @@ func writePost(wr io.Writer, doc *Doc) error {
 	return err
 }
 
-func save(blog *Blog, dest string) error {
-	if err := os.MkdirAll(filepath.Join(dest, mediaPath), 0733); err != nil {
+func process(blog *Blog, dest string) error {
+	media := filepath.Join(dest, mediaPath)
+	if err := os.MkdirAll(media, 0733); err != nil {
 		return err
 	}
 
+	// attachments
+	var client http.Client
+	for _, att := range blog.Attachments {
+		if att.Filename == "" {
+			continue
+		}
+
+		fname := filepath.Join(media, att.Filename)
+		if file, err := os.OpenFile(fname, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644); err == nil {
+			fmt.Printf("fetching %q... ", att.Filename)
+			resp, err := client.Get(att.Url)
+			if err != nil {
+				file.Close()
+				os.Remove(fname)
+				log.Fatalf("Error fetching %q: %s", att.Url, err.Error())
+			}
+			if resp.StatusCode < 200 || resp.StatusCode > 299 {
+				file.Close()
+				os.Remove(fname)
+				log.Fatalf("HTTP error fetching %q: %s", att.Url, resp.Status)
+			}
+			written, err := io.Copy(file, resp.Body)
+			resp.Body.Close()
+			file.Close()
+			if err != nil {
+				os.Remove(fname)
+				log.Fatalf("Error fetching body of %q: %s\n", att.Url, err.Error())
+			}
+			fmt.Printf("%d bytes.\n", written)
+		}
+	}
+
+	// documents
 	for _, doc := range blog.Docs {
 		if doc.Status != StatusPublish {
 			continue
@@ -370,7 +405,7 @@ func main() {
 	}
 
 	blog := convert(&r.Channel)
-	err = save(blog, "c:\\Store\\Blog\\posts")
+	err = process(blog, "c:\\Store\\Blog\\posts")
 	if err != nil {
 		fmt.Printf("Error writing output: %s\n", err.Error())
 	}
