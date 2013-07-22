@@ -536,7 +536,7 @@ func handleImage(w *writer, node *html.Node) bool {
 		surround(w, "(", []byte(url), ")", "()")
 	} else {
 		surround(w, "(", []byte(url), " ", "\"()")
-		surround(w, "\"", []byte(title), "\")", "\"")
+		surround(w, "\"", []byte(title), "\")", "\"()")
 	}
 	return true
 }
