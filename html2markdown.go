@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/rygorous/wp2block/shortcode"
+	"net/url"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -366,6 +367,8 @@ func renderElement(w *writer, n *html.Node, listIndex int) error {
 	case atom.Sub, atom.Sup, atom.Strike, atom.Del, atom.Ins:
 		// HTML tags we just pass through
 		return renderContents(w, "<"+n.Data+">", n, "</"+n.Data+">")
+	case atom.Br:
+		w.WriteString("<br>\n")
 	}
 
 	if n.Namespace == shortcode.Namespace {
@@ -614,8 +617,17 @@ func isImageLink(node *html.Node) bool {
 		return false
 	}
 
-	// Image source and link href must be the same value
-	if attr(node, "href") != attr(imgTag, "src") {
+	// Image source and link href must point to the same target
+	urln, err := url.Parse(attr(node, "href"))
+	if err != nil {
+		return false
+	}
+	urli, err := url.Parse(attr(imgTag, "src"))
+	if err != nil {
+		return false
+	}
+
+	if urln.Scheme != urli.Scheme || urln.Host != urli.Host || urln.Path != urli.Path {
 		return false
 	}
 
