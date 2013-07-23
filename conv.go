@@ -228,7 +228,7 @@ func convert(channel *wxr.Channel) *Blog {
 
 	// Generate markdown for docs
 	for _, doc := range blog.Docs {
-		//fmt.Printf("doc: %s\n", doc.Title)
+		fmt.Printf("doc: %s\n", doc.Title)
 
 		var err error
 		doc.Content, err = ConvertHtmlToMarkdown(doc.ContentHtml, &rewriter)
@@ -398,7 +398,7 @@ func process(blog *Blog, dest string) error {
 }
 
 func main() {
-	r, err := readWxr("c:\\Store\\Downloads\\therygblog.wordpress.2013-07-15.xml")
+	r, err := readWxr("c:\\Store\\Downloads\\therygblog.wordpress.2013-07-23.xml")
 	if err != nil {
 		fmt.Printf("Error reading WXR: %s\n", err.Error())
 		return
